@@ -17,6 +17,7 @@ from threading import Thread
 import time
 import cv2
 import pyqtgraph as pg
+from enum import Enum
 
 from pal.products.qcar import QCar, QCarGPS, IS_PHYSICAL_QCAR
 from pal.utilities.scope import MultiScope
@@ -39,7 +40,7 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 2
+v_ref = 0.75
 K_p = 0.1
 K_i = 2
 
@@ -48,7 +49,7 @@ K_i = 2
 # - K_stanley: gain for stanley controller
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableSteeringControl = True
-pureControl = True
+pureControl = False
 K_stanley = 0
 nodeSequence = [9,7,14,20,22,9]
 nodeSequence = [9,13,19,17,16,17,20,22,9]
@@ -59,6 +60,11 @@ nodeSequence = [9,13,19,17,16,17,20,22,9]
 calibrationPose = [0,0,-np.pi/2]
 #calibrationPose = [0,2,-np.pi/2]
 
+class FrameOfRef(Enum):
+    REAR = 0
+    CENTER = 1
+    FRONT = 2
+
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
 
@@ -68,7 +74,7 @@ if enableSteeringControl:
     waypointSequence = roadmap.generate_path(nodeSequence)
     
     initialPose = roadmap.get_node_pose(nodeSequence[0]).squeeze()
-    initialPose = initialPose - [0.2125, 0, 0]
+    # initialPose = initialPose - [0.2125, 0, 0]
     print("This is the initial pose",initialPose)
 else:
     initialPose = [0, 0, 0]
@@ -122,7 +128,7 @@ class SpeedController:
 
 class PureSteeringController:
 
-    def __init__(self, waypoints, gain=1, cyclic=True, carLength = 0.425):
+    def __init__(self, waypoints, gain=1, cyclic=True, carLength = 0.425, frameOfRef= FrameOfRef.CENTER):
         self.maxSteeringAngle = np.pi/6
 
         self.wp = waypoints
@@ -137,75 +143,82 @@ class PureSteeringController:
         self.th_ref = 0
         self.carLength = carLength
 
+        self.frameOfRef = frameOfRef
+
     # ==============  SECTION B -  Steering Control  ====================
-    def updateCenterFrame(self, p, th, speed):
+    def update(self, p, th, speed):
 
-        # # 1. Get current and next waypoint
-        wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-        #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+        if self.frameOfRef == FrameOfRef.CENTER:
 
-        goalWp = wp1
+            # # 1. Get current and next waypoint
+            wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+            #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
-        distToGoalWp = np.linalg.norm(goalWp - p)
+            goalWp = wp1
 
-        if speed != 0:
-            while distToGoalWp < ( 0.5 * speed):
-                self.wpI += 1
+            distToGoalWp = np.linalg.norm(goalWp - p)
 
-                wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-                # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+            if speed != 0:
+                while distToGoalWp < ( 0.5 * speed):
+                    self.wpI += 1
 
-                # goalWp = ((8 * wp1) + (2 * wp2)) / 10
-                goalWp = wp1
+                    wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+                    # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
-                distToGoalWp = np.linalg.norm(goalWp - p)
+                    # goalWp = ((8 * wp1) + (2 * wp2)) / 10
+                    goalWp = wp1
 
-    
-        vectP = goalWp - p        
-        ksi = np.arctan2(vectP[1],vectP[0]) - th
-        distP = np.linalg.norm(vectP)
+                    distToGoalWp = np.linalg.norm(goalWp - p)
 
-        # Solution when using the rear axe as the reference Frame
-        num = (2 * self.carLength * np.sin(ksi))
-        dnom =  (distP**2) - ( self.carLength * np.sin(ksi))
-        dnom = np.sqrt(dnom)
-        delta = np.arctan2(num, dnom)
-            
-        return delta
-    
-    def updateRearFrame(self, p, th, speed):
+        
+            vectP = goalWp - p        
+            ksi = np.arctan2(vectP[1],vectP[0]) - th
+            distP = np.linalg.norm(vectP)
 
-        # # 1. Get current and next waypoint
-        wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-        #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+            # Solution when using the rear axe as the reference Frame
+            num = (2 * self.carLength * np.sin(ksi))
+            dnom =  (distP**2) - ( self.carLength * np.sin(ksi))
+            dnom = np.sqrt(dnom)
+            delta = np.arctan2(num, dnom)
+                
+            return delta
 
-        goalWp = wp1
+        elif self.frameOfRef == FrameOfRef.REAR:
 
-        distToGoalWp = np.linalg.norm(goalWp - p)
+            # # 1. Get current and next waypoint
+            wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+            #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
-        if speed != 0:
-            while distToGoalWp < ( 0.5 * speed):
-                self.wpI += 1
+            goalWp = wp1
 
-                wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-                # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+            distToGoalWp = np.linalg.norm(goalWp - p)
 
-                # goalWp = ((8 * wp1) + (2 * wp2)) / 10
-                goalWp = wp1
+            if speed != 0:
+                while distToGoalWp < ( 0.5 * speed):
+                    self.wpI += 1
 
-                distToGoalWp = np.linalg.norm(goalWp - p)
+                    wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+                    # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
-    
-        vectP = goalWp - p        
-        ksi = np.arctan2(vectP[1],vectP[0]) - th
-        distP = np.linalg.norm(vectP)
+                    # goalWp = ((8 * wp1) + (2 * wp2)) / 10
+                    goalWp = wp1
 
-        # Solution when using the rear axe as the reference Frame
-        num = (2 * self.carLength * np.sin(ksi))
-        dnom =  distP
-        delta = np.arctan2(num, dnom)
-            
-        return delta    
+                    distToGoalWp = np.linalg.norm(goalWp - p)
+
+        
+            vectP = goalWp - p        
+            ksi = np.arctan2(vectP[1],vectP[0]) - th
+            distP = np.linalg.norm(vectP)
+
+            # Solution when using the rear axe as the reference Frame
+            num = (2 * self.carLength * np.sin(ksi))
+            dnom =  distP
+            delta = np.arctan2(num, dnom)
+                
+            return delta
+        
+        else:
+            return 0
 
 class StanleySteeringControl(PureSteeringController):
 
@@ -214,22 +227,41 @@ class StanleySteeringControl(PureSteeringController):
 
         # 1. Get current and next waypoint
         wp = self.wp[:, np.mod(self.wpI, self.N-1)]
-        wp1 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
-        
-        goalWp = ((7 * wp1) + (3 * wp2)) / 10
-        vectP = goalWp - p        
-        ksi = np.arctan2(vectP[1],vectP[0]) - th
-        distP = np.linalg.norm(vectP)
+        wpOld = self.wp[:, np.mod(self.wpI-1, self.N-1)]
 
-        num = (2 * self.carLength * np.sin(ksi))
-        dnom =  distP
-        delta = np.arctan2(num, dnom)
+        distToGoalWp = np.linalg.norm(wp - p)
 
-        distToGoalWp = np.linalg.norm(wp1 - p)
-        if distToGoalWp < 0.125:
-            self.wpI += 1
+        if speed != 0:
+            while distToGoalWp < (0.5 * speed):
+                self.wpI += 1
+
+                wp = self.wp[:, np.mod(self.wpI, self.N-1)]
+
+                distToGoalWp = np.linalg.norm(wp - p)
+
+        # 1. Vector from old waypoint to current waypoint (the path segment)
+        path_vec = wp - wpOld
+      
+        ksiS = np.arctan2(path_vec[1],path_vec[0]) - th
+   
+        # 2. Vector from old waypoint to the vehicle position
+        vec_wp_to_p = p - wpOld
+
+        # 3. Calculate cross-track error (eS) 
+        # We use the 2D cross product to find the perpendicular distance
+        # |a x b| / |a|
+        cross_product = path_vec[0] * vec_wp_to_p[1] - path_vec[1] * vec_wp_to_p[0]
+        eS = cross_product / np.linalg.norm(path_vec)
+
+        # Note: This eS is signed! Positive means one side, negative the other.
+        # For Stanley, you usually want: deltaE = np.arctan2(k * eS, speed)
+
+        deltaE = np.arctan2((1 * eS), (speed + 0.1))
+        delta = ksiS + deltaE
 
         return delta
+    
+
 
 def controlLoop():
     #region controlLoop setup
