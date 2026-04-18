@@ -39,7 +39,7 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 0.5
+v_ref = 1
 K_p = 0.1
 K_i = 2
 
@@ -51,12 +51,13 @@ enableSteeringControl = True
 pureControl = True
 K_stanley = 0
 nodeSequence = [9,7,14,20,22,9]
+nodeSequence = [9,13,19,17,16,17,20,22,9]
 
 # Define the calibration pose
 # Calibration pose is either [0,0,-pi/2] or [0,2,-pi/2]
 # Comment out the one that is not used 
-#calibrationPose = [0,0,-np.pi/2]
-calibrationPose = [0,2,-np.pi/2]
+calibrationPose = [0,0,-np.pi/2]
+#calibrationPose = [0,2,-np.pi/2]
 
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -67,6 +68,7 @@ if enableSteeringControl:
     waypointSequence = roadmap.generate_path(nodeSequence)
     
     initialPose = roadmap.get_node_pose(nodeSequence[0]).squeeze()
+    initialPose = initialPose - [0.2125, 0, 0]
     print("This is the initial pose",initialPose)
 else:
     initialPose = [0, 0, 0]
@@ -142,13 +144,12 @@ class PureSteeringController:
         wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
         #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
-        # goalWp = ((8 * wp1) + (2 * wp2)) / 10
         goalWp = wp1
 
         distToGoalWp = np.linalg.norm(goalWp - p)
 
         if speed != 0:
-            while distToGoalWp < (0.5 * speed):
+            while distToGoalWp < ( 0.5 * speed):
                 self.wpI += 1
 
                 wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
@@ -169,27 +170,7 @@ class PureSteeringController:
         dnom =  distP
         delta = np.arctan2(num, dnom)
             
-
         return delta
-
-        # # 1. Get current and next waypoint
-        # wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-        # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
-        
-        # goalWp = ((7 * wp1) + (3 * wp2)) / 10
-        # vectP = goalWp - p        
-        # ksi = np.arctan2(vectP[1],vectP[0]) - th
-        # distP = np.linalg.norm(vectP)
-
-        # num = (2 * self.carLength * np.sin(ksi))
-        # dnom =  distP
-        # delta = np.arctan2(num, dnom)
-
-        # distToGoalWp = np.linalg.norm(wp1 - p)
-        # if distToGoalWp < 0.125:
-        #     self.wpI += 1
-
-        # return delta
 
 class StanleySteeringControl(PureSteeringController):
 
