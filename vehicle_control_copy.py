@@ -39,7 +39,7 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 1
+v_ref = 2
 K_p = 0.1
 K_i = 2
 
@@ -167,7 +167,8 @@ class PureSteeringController:
 
         # Solution when using the rear axe as the reference Frame
         num = (2 * self.carLength * np.sin(ksi))
-        dnom =  distP
+        dnom =  (distP**2) - ( self.carLength * np.sin(ksi))
+        dnom = np.sqrt(dnom)
         delta = np.arctan2(num, dnom)
             
         return delta
