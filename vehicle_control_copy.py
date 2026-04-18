@@ -138,7 +138,7 @@ class PureSteeringController:
         self.carLength = carLength
 
     # ==============  SECTION B -  Steering Control  ====================
-    def update(self, p, th, speed):
+    def updateCenterFrame(self, p, th, speed):
 
         # # 1. Get current and next waypoint
         wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
@@ -172,6 +172,40 @@ class PureSteeringController:
         delta = np.arctan2(num, dnom)
             
         return delta
+    
+    def updateRearFrame(self, p, th, speed):
+
+        # # 1. Get current and next waypoint
+        wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+        #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+
+        goalWp = wp1
+
+        distToGoalWp = np.linalg.norm(goalWp - p)
+
+        if speed != 0:
+            while distToGoalWp < ( 0.5 * speed):
+                self.wpI += 1
+
+                wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+                # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+
+                # goalWp = ((8 * wp1) + (2 * wp2)) / 10
+                goalWp = wp1
+
+                distToGoalWp = np.linalg.norm(goalWp - p)
+
+    
+        vectP = goalWp - p        
+        ksi = np.arctan2(vectP[1],vectP[0]) - th
+        distP = np.linalg.norm(vectP)
+
+        # Solution when using the rear axe as the reference Frame
+        num = (2 * self.carLength * np.sin(ksi))
+        dnom =  distP
+        delta = np.arctan2(num, dnom)
+            
+        return delta    
 
 class StanleySteeringControl(PureSteeringController):
 
