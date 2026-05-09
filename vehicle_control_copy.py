@@ -28,6 +28,11 @@ import pal.resources.images as images
 
 
 #================ Experiment Configuration ================
+class FrameOfRef(Enum):
+    REAR = 0
+    CENTER = 1
+    FRONT = 2
+
 # ===== Timing Parameters
 # - tf: experiment duration in seconds.
 # - startDelay: delay to give filters time to settle in seconds.
@@ -40,9 +45,9 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 0.75
+v_ref = 2
 K_p = 0.1
-K_i = 2
+K_i = 1
 
 # ===== Steering Controller Parameters
 # - enableSteeringControl: whether or not to enable steering control
@@ -50,8 +55,9 @@ K_i = 2
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableSteeringControl = True
 pureControl = False
-K_stanley = 0
-nodeSequence = [9,7,14,20,22,9]
+frameOfRef = FrameOfRef.CENTER
+K_stanley = 0.7
+#nodeSequence = [9,7,14,20,22,9]
 nodeSequence = [9,13,19,17,16,17,20,22,9]
 
 # Define the calibration pose
@@ -60,10 +66,7 @@ nodeSequence = [9,13,19,17,16,17,20,22,9]
 calibrationPose = [0,0,-np.pi/2]
 #calibrationPose = [0,2,-np.pi/2]
 
-class FrameOfRef(Enum):
-    REAR = 0
-    CENTER = 1
-    FRONT = 2
+
 
 #endregion
 # -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -111,7 +114,6 @@ class SpeedController:
 
         self.uOld = 0
 
-
     # ==============  SECTION A -  Speed Control  ====================
     def update(self, v, v_ref, dt):
 
@@ -125,7 +127,6 @@ class SpeedController:
 
         return uNew
     
-
 class PureSteeringController:
 
     def __init__(self, waypoints, gain=1, cyclic=True, carLength = 0.425, frameOfRef= FrameOfRef.CENTER):
@@ -152,7 +153,6 @@ class PureSteeringController:
 
             # # 1. Get current and next waypoint
             wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-            #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
             goalWp = wp1
 
@@ -163,44 +163,38 @@ class PureSteeringController:
                     self.wpI += 1
 
                     wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-                    # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
-
-                    # goalWp = ((8 * wp1) + (2 * wp2)) / 10
                     goalWp = wp1
-
                     distToGoalWp = np.linalg.norm(goalWp - p)
 
-        
             vectP = goalWp - p        
             ksi = np.arctan2(vectP[1],vectP[0]) - th
             distP = np.linalg.norm(vectP)
 
-            # Solution when using the rear axe as the reference Frame
+            # Solution when using the Center as the reference Frame
             num = (2 * self.carLength * np.sin(ksi))
             dnom =  (distP**2) - ( self.carLength * np.sin(ksi))
             dnom = np.sqrt(dnom)
             delta = np.arctan2(num, dnom)
                 
-            return delta
+            return np.clip(wrap_to_pi(delta),
+            -self.maxSteeringAngle,
+            self.maxSteeringAngle)
 
         elif self.frameOfRef == FrameOfRef.REAR:
 
             # # 1. Get current and next waypoint
             wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-            #wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
 
             goalWp = wp1
 
             distToGoalWp = np.linalg.norm(goalWp - p)
 
             if speed != 0:
-                while distToGoalWp < ( 0.5 * speed):
+                while distToGoalWp < ( 0.75 * speed):
                     self.wpI += 1
 
                     wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
-                    # wp2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
-
-                    # goalWp = ((8 * wp1) + (2 * wp2)) / 10
+                    
                     goalWp = wp1
 
                     distToGoalWp = np.linalg.norm(goalWp - p)
@@ -215,7 +209,9 @@ class PureSteeringController:
             dnom =  distP
             delta = np.arctan2(num, dnom)
                 
-            return delta
+            return np.clip(wrap_to_pi(delta),
+            -self.maxSteeringAngle,
+            self.maxSteeringAngle)
         
         else:
             return 0
@@ -225,6 +221,10 @@ class StanleySteeringControl(PureSteeringController):
     # ==============  SECTION B -  Steering Control  ====================
     def update(self, p, th, speed):
 
+        
+        # ----------------------------------------------------- #
+        # Own implementation
+
         # 1. Get current and next waypoint
         wp = self.wp[:, np.mod(self.wpI, self.N-1)]
         wpOld = self.wp[:, np.mod(self.wpI-1, self.N-1)]
@@ -232,7 +232,7 @@ class StanleySteeringControl(PureSteeringController):
         distToGoalWp = np.linalg.norm(wp - p)
 
         if speed != 0:
-            while distToGoalWp < (0.5 * speed):
+            while distToGoalWp < 0.25 * speed :
                 self.wpI += 1
 
                 wp = self.wp[:, np.mod(self.wpI, self.N-1)]
@@ -250,19 +250,56 @@ class StanleySteeringControl(PureSteeringController):
         # 3. Calculate cross-track error (eS) 
         # We use the 2D cross product to find the perpendicular distance
         # |a x b| / |a|
-        cross_product = path_vec[0] * vec_wp_to_p[1] - path_vec[1] * vec_wp_to_p[0]
+        cross_product = path_vec[1] * vec_wp_to_p[0] - path_vec[0] * vec_wp_to_p[1]
         eS = cross_product / np.linalg.norm(path_vec)
 
         # Note: This eS is signed! Positive means one side, negative the other.
         # For Stanley, you usually want: deltaE = np.arctan2(k * eS, speed)
 
-        deltaE = np.arctan2((1 * eS), (speed + 0.1))
+        deltaE = np.arctan2((1.13 * eS), (speed + 0.2))
         delta = ksiS + deltaE
-
-        return delta
     
+        return np.clip(
+            wrap_to_pi(delta),
+            -self.maxSteeringAngle,
+            self.maxSteeringAngle)
+    
+        # ----------------------------------------------------- #
+        # Quanser implementation
 
+        # wp_1 = self.wp[:, np.mod(self.wpI, self.N-1)]
+        # wp_2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+        
+        # v = wp_2 - wp_1
+        # v_mag = np.linalg.norm(v)
+        # try:
+        #     v_uv = v / v_mag
+        # except ZeroDivisionError:
+        #     return 0
 
+        # tangent = np.arctan2(v_uv[1], v_uv[0])
+
+        # s = np.dot(p-wp_1, v_uv)
+
+        # if s >= v_mag:
+        #     if  self.cyclic or self.wpI < self.N-2:
+        #         self.wpI += 1
+
+        # ep = wp_1 + v_uv*s
+        # ct = ep - p
+        # dir = wrap_to_pi(np.arctan2(ct[1], ct[0]) - tangent)
+
+        # ect = np.linalg.norm(ct) * np.sign(dir)
+        # psi = wrap_to_pi(tangent-th)
+
+        # self.p_ref = ep
+        # self.th_ref = tangent
+
+        # return np.clip(
+        #     wrap_to_pi(psi + np.arctan2(0.7*ect, speed)),
+        #     -self.maxSteeringAngle,
+        #     self.maxSteeringAngle)
+    
 def controlLoop():
     #region controlLoop setup
     global KILL_THREAD
@@ -271,6 +308,21 @@ def controlLoop():
     # used to limit data sampling to 10hz
     countMax = controllerUpdateRate / 10
     count = 0
+    #endregion
+
+    #region QCar interface setup
+    qcar = QCar(readMode=1, frequency=controllerUpdateRate)
+    if enableSteeringControl or calibrate:
+        if not pureControl:
+            initialPose[0:2] = initialPose[0:2] + (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.225)
+        else:
+            if frameOfRef == FrameOfRef.REAR:
+                initialPose[0:2] = initialPose[0:2] - (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.225)
+
+        ekf = QCarEKF(x_0=initialPose)
+        gps = QCarGPS(initialPose=calibrationPose,calibrate=calibrate)
+    else:
+        gps = memoryview(b'')
     #endregion
 
     #region Controller initialization
@@ -289,15 +341,6 @@ def controlLoop():
                 waypoints=waypointSequence,
                 gain=K_stanley
             )
-    #endregion
-
-    #region QCar interface setup
-    qcar = QCar(readMode=1, frequency=controllerUpdateRate)
-    if enableSteeringControl or calibrate:
-        ekf = QCarEKF(x_0=initialPose)
-        gps = QCarGPS(initialPose=calibrationPose,calibrate=calibrate)
-    else:
-        gps = memoryview(b'')
     #endregion
 
     with qcar, gps:
@@ -350,7 +393,7 @@ def controlLoop():
                 
                 if not pureControl:
                     p = ( np.array([x, y])
-                        + np.array([np.cos(th), np.sin(th)]) * 0.2)
+                        + np.array([np.cos(th), np.sin(th)]) * 0.225)
                 else:        
                     p = ( np.array([x, y]))
                 
