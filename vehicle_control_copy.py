@@ -45,7 +45,7 @@ controllerUpdateRate = 100
 # - v_ref: desired velocity in m/s
 # - K_p: proportional gain for speed controller
 # - K_i: integral gain for speed controller
-v_ref = 2
+v_ref = 1.5
 K_p = 0.1
 K_i = 1
 
@@ -54,8 +54,8 @@ K_i = 1
 # - K_stanley: gain for stanley controller
 # - nodeSequence: list of nodes from roadmap. Used for trajectory generation.
 enableSteeringControl = True
-pureControl = False
-frameOfRef = FrameOfRef.CENTER
+pureControl = True
+frameOfRef = FrameOfRef.REAR
 K_stanley = 0.7
 #nodeSequence = [9,7,14,20,22,9]
 nodeSequence = [9,13,19,17,16,17,20,22,9]
@@ -103,7 +103,6 @@ signal.signal(signal.SIGINT, sig_handler)
 #endregion
 
 class SpeedController:
-
     def __init__(self, kp=0, ki=0):
         self.maxThrottle = 0.3
 
@@ -148,7 +147,8 @@ class PureSteeringController:
 
     # ==============  SECTION B -  Steering Control  ====================
     def update(self, p, th, speed):
-
+        # CENTER not so stable yet, probably won't
+        # since the denominator from the equation can become negative
         if self.frameOfRef == FrameOfRef.CENTER:
 
             # # 1. Get current and next waypoint
@@ -172,6 +172,8 @@ class PureSteeringController:
 
             # Solution when using the Center as the reference Frame
             num = (2 * self.carLength * np.sin(ksi))
+
+            ## ERROR -> negative Values occurre
             dnom =  (distP**2) - ( self.carLength * np.sin(ksi))
             dnom = np.sqrt(dnom)
             delta = np.arctan2(num, dnom)
@@ -190,7 +192,7 @@ class PureSteeringController:
             distToGoalWp = np.linalg.norm(goalWp - p)
 
             if speed != 0:
-                while distToGoalWp < ( 0.75 * speed):
+                while distToGoalWp < ( 0.5 * speed):
                     self.wpI += 1
 
                     wp1 = self.wp[:, np.mod(self.wpI, self.N-1)]
@@ -221,18 +223,18 @@ class StanleySteeringControl(PureSteeringController):
     # ==============  SECTION B -  Steering Control  ====================
     def update(self, p, th, speed):
 
-        
-        # ----------------------------------------------------- #
-        # Own implementation
+        # # ----------------------------------------------------- #
+        # # Own implementation
+        # # Is just as good as the Quanser implementation
 
         # 1. Get current and next waypoint
-        wp = self.wp[:, np.mod(self.wpI, self.N-1)]
-        wpOld = self.wp[:, np.mod(self.wpI-1, self.N-1)]
+        wp = self.wp[:, np.mod(self.wpI+1, self.N-1)]
+        wpOld = self.wp[:, np.mod(self.wpI, self.N-1)]
 
         distToGoalWp = np.linalg.norm(wp - p)
 
         if speed != 0:
-            while distToGoalWp < 0.25 * speed :
+            while distToGoalWp < (0.5 * speed) :
                 self.wpI += 1
 
                 wp = self.wp[:, np.mod(self.wpI, self.N-1)]
@@ -249,23 +251,23 @@ class StanleySteeringControl(PureSteeringController):
 
         # 3. Calculate cross-track error (eS) 
         # We use the 2D cross product to find the perpendicular distance
-        # |a x b| / |a|
+        # a x b / |a|
+        # This eS is signed! Positive means one side, negative the other.
         cross_product = path_vec[1] * vec_wp_to_p[0] - path_vec[0] * vec_wp_to_p[1]
         eS = cross_product / np.linalg.norm(path_vec)
 
-        # Note: This eS is signed! Positive means one side, negative the other.
-        # For Stanley, you usually want: deltaE = np.arctan2(k * eS, speed)
-
-        deltaE = np.arctan2((1.13 * eS), (speed + 0.2))
+        # Here the normal arctan was used just to get values from -pi/2 to pi/2
+        # Values beyond -pi/2 or pi/2 would just mean a reverse
+        deltaE = np.arctan((1.13 * eS)/(speed + 0.2))
         delta = ksiS + deltaE
     
         return np.clip(
             wrap_to_pi(delta),
             -self.maxSteeringAngle,
-            self.maxSteeringAngle)
+            self.maxSteeringAngle)     
     
-        # ----------------------------------------------------- #
-        # Quanser implementation
+        # # # ----------------------------------------------------- #
+        # # # Quanser implementation
 
         # wp_1 = self.wp[:, np.mod(self.wpI, self.N-1)]
         # wp_2 = self.wp[:, np.mod(self.wpI+1, self.N-1)]
@@ -313,11 +315,10 @@ def controlLoop():
     #region QCar interface setup
     qcar = QCar(readMode=1, frequency=controllerUpdateRate)
     if enableSteeringControl or calibrate:
-        if not pureControl:
-            initialPose[0:2] = initialPose[0:2] + (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.225)
-        else:
-            if frameOfRef == FrameOfRef.REAR:
-                initialPose[0:2] = initialPose[0:2] - (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.225)
+        if frameOfRef == FrameOfRef.FRONT:
+            initialPose[0:2] = initialPose[0:2] - (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.2125)
+        elif frameOfRef == FrameOfRef.REAR:
+            initialPose[0:2] = initialPose[0:2] + (np.array([np.cos(initialPose[2]), np.sin(initialPose[2])]) * 0.2125)
 
         ekf = QCarEKF(x_0=initialPose)
         gps = QCarGPS(initialPose=calibrationPose,calibrate=calibrate)
@@ -330,16 +331,16 @@ def controlLoop():
         kp=K_p,
         ki=K_i
     )
+
     if enableSteeringControl:
         if pureControl:
             steeringController = PureSteeringController(
                 waypoints=waypointSequence,
-                gain=K_stanley
+                frameOfRef= frameOfRef
             )
-        else :    
+        else:    
             steeringController = StanleySteeringControl(
-                waypoints=waypointSequence,
-                gain=K_stanley
+                waypoints=waypointSequence
             )
     #endregion
 
@@ -390,11 +391,12 @@ def controlLoop():
                 y = ekf.x_hat[1,0]
                 
                 th = ekf.x_hat[2,0]
-                
-                if not pureControl:
-                    p = ( np.array([x, y])
-                        + np.array([np.cos(th), np.sin(th)]) * 0.225)
-                else:        
+
+                if frameOfRef == FrameOfRef.FRONT:
+                    p = ( np.array([x, y]) + np.array([np.cos(th), np.sin(th)]) * 0.2125)
+                elif frameOfRef == FrameOfRef.REAR:
+                    p = ( np.array([x, y]) - np.array([np.cos(th), np.sin(th)]) * 0.2125)
+                else:
                     p = ( np.array([x, y]))
                 
             v = qcar.motorTach
